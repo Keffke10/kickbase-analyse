@@ -317,3 +317,12 @@ table.fixm td { padding: .3rem .25rem; }
 table.hist td.win { font-weight: 700; }
 table.hist td:last-child { font-size: .78rem; }
 table.fixm .du { text-align: center; font-weight: 700; padding: 0 .4rem; color: var(--accent); }
+
+/* ---------- Datenquellen */
+.sources { list-style: none; padding: 0; margin: 0; }
+.sources li { display: grid; grid-template-columns: 1.4rem 1fr; gap: .4rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+.sources li:last-child { border-bottom: 0; }
+.sources li > span { font-weight: 700; }
+.sources small { display: block; color: var(--text-2); }
+table.basis td { white-space: normal; vertical-align: top; }
+table.basis td:first-child { white-space: nowrap; color: var(--text-2); }

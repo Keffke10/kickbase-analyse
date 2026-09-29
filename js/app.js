@@ -5,6 +5,8 @@ import {
   esc, img, num, num1, eur, signedEur, pct, deltaClass, POS, POS_LONG, statusInfo, PROB, countdown, dateTime, ago, mean,
 } from './util.js';
 
+const APP_VERSION = '0.2-dev';
+
 // ------------------------------------------------------------ Sitzung (nur Token, niemals Passwort)
 
 const KEY = 'kba.session';
@@ -72,6 +74,22 @@ function fixtureText(f, teams) {
   if (!f) return '<span class="muted">kein Spiel</span>';
   const opp = teams.get(f.opp);
   return `${f.home ? 'vs' : '@'} ${crest(opp?.tim, 14)} ${esc(opp?.sy || '?')} <span class="muted">(${Math.round(f.win * 100)} % Sieg)</span>`;
+}
+
+/** Transparente Aufschlüsselung, woraus sich die Prognose eines Spielers zusammensetzt. */
+function basisTable(p) {
+  const h = p.hist;
+  const rows = [
+    ['Saison-Ø (Kickbase)', `${num(p.ap)}${h?.cur ? ` <small class="muted">aus ${h.cur.games} Spielen</small>` : ''}`],
+    ['Vorsaison-Ø', h?.prev?.avg != null ? `${num(h.prev.avg)} <small class="muted">aus ${h.prev.games} Spielen</small>` : '–'],
+    ['Geglätteter Ø', p.apAdj != null ? `<b>${num(p.apAdj)}</b>${p.priorWeight ? ` <small class="muted">(${Math.round(p.priorWeight * 100)} % Vorsaison)</small>` : ''}` : '–'],
+    ['Form (letzte Spiele)', num(p.form)],
+    ['Startelf letzte Spiele', p.startShare != null ? `${Math.round(p.startShare * 100)} %` : '–'],
+    ['Kickbase-Prognose', PROB[p.prob]?.label ?? '–'],
+    ['Einsatzchance gesamt', `${Math.round(p.availNext * 100)} %`],
+    ['MW-Signal (92 Tage)', p.mvTrend?.signal ? `${esc(p.mvTrend.signal)} <small class="muted">(3 T: ${signedEur(p.mvTrend.s3)}/Tag, 14 T: ${signedEur(p.mvTrend.s14)}/Tag)</small>` : '–'],
+  ];
+  return `<div class="table-wrap"><table class="rank basis">${rows.map(([l, v]) => `<tr><td>${l}</td><td class="r">${v}</td></tr>`).join('')}</table></div>`;
 }
 
 function trend(p) {
@@ -273,9 +291,9 @@ function viewHome() {
     <div class="row-between"><h2>Marktwert-Trading</h2><span class="muted small">${secondsToMv > 0 ? `MW-Update in ${countdown(secondsToMv)}` : ''}</span></div>
     <p class="small muted">Kickbase passt die Marktwerte einmal täglich an. Steigende Spieler früh kaufen, fallende vor dem Update verkaufen.</p>
     <h3 class="pos">▲ Steigen (Transfermarkt)</h3>
-    ${risers.map((p) => playerRow(p, `<span class="pos">+${eur(p.daily)}</span><small>${pct(p.daily / p.mv)} / Tag</small>`, `· ${eur(p.mv)}`)).join('') || '<p class="muted">–</p>'}
+    ${risers.map((p) => playerRow(p, `<span class="pos">+${eur(p.daily)}</span><small>${pct(p.daily / p.mv)} / Tag</small>`, `· ${eur(p.mv)}${p.mvTrend?.signal ? ` · ${esc(p.mvTrend.signal)}` : ''}`)).join('') || '<p class="muted">–</p>'}
     <h3 class="neg">▼ Fallen (dein Kader)</h3>
-    ${fallers.map((p) => playerRow(p, `<span class="neg">−${eur(-p.daily)}</span><small>${pct(p.daily / p.mv)} / Tag</small>`, `· ${eur(p.mv)}`)).join('') || '<p class="muted">Keiner deiner Spieler fällt.</p>'}
+    ${fallers.map((p) => playerRow(p, `<span class="neg">−${eur(-p.daily)}</span><small>${pct(p.daily / p.mv)} / Tag</small>`, `· ${eur(p.mv)}${p.mvTrend?.signal ? ` · ${esc(p.mvTrend.signal)}` : ''}`)).join('') || '<p class="muted">Keiner deiner Spieler fällt.</p>'}
   </section>
   <section class="card">
     <div class="row-between"><h2>Kaufempfehlungen</h2><button class="link" data-action="tab" data-tab="market">Markt →</button></div>
@@ -473,7 +491,7 @@ function viewPlayers() {
         ${[['gap', 'Unterbewertet'], ['score', 'Kauf-Score'], ['eff', 'Preis-Leistung'], ['ap', 'Ø Punkte'], ['xp', 'Erw. nächstes Spiel'], ['trend', 'MW-Trend'], ['mv', 'Marktwert']].map(([v, l]) => `<option value="${v}" ${state.playerSort === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select></label>
     </div>
-    ${detailCount < a.all.length * 0.9 ? `<button class="btn small" data-action="deep">Tiefenanalyse: Form aller ${a.all.length} Spieler laden</button>` : '<p class="small ok">✓ Formdaten aller Spieler geladen.</p>'}
+    ${detailCount < a.all.length * 0.9 ? `<button class="btn small" data-action="deep">Tiefenanalyse: Form &amp; Vorsaison aller ${a.all.length} Spieler laden (ca. 25 MB)</button>` : '<p class="small ok">✓ Formdaten aller Spieler geladen.</p>'}
   </section>
   <section class="card" id="playerList">${playerListHtml()}</section>`;
 }
@@ -516,7 +534,7 @@ function viewFixtureMatrix() {
   const cell = (f) => {
     if (!f) return '<td class="cell">–</td>';
     const o = a.teams.get(f.opp);
-    const title = `${f.home ? 'Heim' : 'Auswärts'} gegen ${o?.tn || ''}: ${Math.round(f.win * 100)} % Siegchance`;
+    const title = `${f.home ? 'Heim' : 'Auswärts'} gegen ${o?.tn || ''}: ${Math.round(f.win * 100)} % Siegchance, erw. Tore ${f.xgFor.toFixed(1)}:${f.xgAgainst.toFixed(1)}, zu Null ${Math.round(f.cs * 100)} %`;
     return `<td class="cell ${lvl(f.win)}" title="${esc(title)}"><b>${esc(o?.sy || '?')}</b> ${f.home ? 'H' : 'A'}<small>${Math.round(f.win * 100)} %</small></td>`;
   };
   return `<section class="card"><h2>Restprogramm</h2>
@@ -584,16 +602,31 @@ function viewInfo() {
     ${state.s.leagues.length > 1 ? '<button class="btn" data-action="switch">Liga wechseln</button>' : ''}
     <button class="btn danger" data-action="logout">Abmelden &amp; lokale Daten löschen</button>
   </section>
+  <section class="card"><h2>Datenquellen</h2>
+    <ul class="sources">
+      <li><span class="ok">✓</span><div><b>Kickbase – Liga, Markt, Kader, Spielplan</b><small>Budget, Gebote, Startelf-Prognose, Verletzungen, Wettquoten, Ergebnisse</small></div></li>
+      <li><span class="${a.sources.history ? 'ok' : 'muted'}">${a.sources.history ? '✓' : '–'}</span><div><b>Kickbase – Leistungshistorie</b><small>${a.sources.history} Spieler: Vorsaison-Ø als Prior, Startelf-Quote → erwartete Punkte, fairer Marktwert, Einsatzchance</small></div></li>
+      <li><span class="${a.sources.mvHistory ? 'ok' : 'muted'}">${a.sources.mvHistory ? '✓' : '–'}</span><div><b>Kickbase – Marktwertverlauf 92 Tage</b><small>${a.sources.mvHistory} Spieler: 3-/14-Tage-Trend &amp; Trendwende → MW-Prognose, Momentum, Gebote</small></div></li>
+      <li><span class="${a.sources.openLigaDb ? 'ok' : 'neg'}">${a.sources.openLigaDb ? '✓' : '✕'}</span><div><b>OpenLigaDB – Abschlusstabellen ${esc(a.sources.openLigaDb || 'Vorsaison')}</b><small>${a.sources.openLigaDb ? '1. &amp; 2. Liga: Tore als Stärke-Prior (inkl. Aufsteiger) → Tor-Modell' : 'nicht erreichbar – Tor-Modell nutzt nur die laufende Saison'}</small></div></li>
+      <li><span class="ok">✓</span><div><b>Liga-Gebote anderer Manager</b><small>Anzahl Konkurrenzgebote → Aufschlag im Gebotsvorschlag</small></div></li>
+    </ul>
+  </section>
   <section class="card"><h2>So rechnet die App</h2>
     <dl class="explain">
+      <dt>Geglätteter Ø (Vorsaison-Prior)</dt>
+      <dd>Früh in der Saison sagt ein Ø aus 2–4 Spielen wenig. Die Vorsaison geht deshalb mit bis zu 6 „virtuellen Spielen“ ein; je mehr aktuelle Spiele, desto geringer ihr Einfluss.</dd>
+      <dt>Tor-Modell</dt>
+      <dd>Angriffs- und Abwehrstärke je Verein aus den Toren der laufenden Saison, geglättet mit der Vorsaison (Aufsteiger: 2.-Liga-Werte abgeschwächt). Daraus per Poisson-Verteilung: erwartete Tore, Sieg-/Remis-Chance und die Chance auf „zu Null“. Liegen Wettquoten vor, zählen sie zu 70 %.</dd>
       <dt>Erwartete Punkte (nächster Spieltag)</dt>
-      <dd>Basis = 55 % gewichtete Form der letzten Spiele + 45 % Saison-Ø. Multipliziert mit dem Gegner-Faktor (aus Wettquoten bzw. Tabellenstärke, 0,85–1,18) und der Einsatzchance (Kickbase-Startelfprognose &amp; Verletzungsstatus).</dd>
+      <dd>Basis = 55 % gewichtete Form + 45 % geglätteter Ø. Multipliziert mit dem Spielausgangs-Faktor (0,85–1,18), einem Positionsfaktor (TW/ABW: Zu-Null-Chance, MF/ST: erwartete eigene Tore) und der Einsatzchance (75 % Kickbase-Prognose + 25 % tatsächliche Startelf-Quote, Verletzungsstatus).</dd>
       <dt>Fairer („echter“) Marktwert</dt>
-      <dd>Regressionsmodell über alle ${a.fair.n} Bundesliga-Spieler: log(Marktwert) ~ Position + √Ø-Punkte + Einsatzchance. Es zeigt, was ein Spieler mit dieser Leistung typischerweise kostet. Erklärte Varianz R² = ${a.fair.r2 != null ? a.fair.r2.toFixed(2).replace('.', ',') : '–'}. „Unterbewertet“ = Marktwert liegt deutlich unter dem Modellwert.</dd>
+      <dd>Regressionsmodell über alle ${a.fair.n} Bundesliga-Spieler: log(Marktwert) ~ Position + √Ø-Punkte + Einsatzchance. Bewertet wird mit dem geglätteten Ø. Es zeigt, was ein Spieler mit dieser Leistung typischerweise kostet. Erklärte Varianz R² = ${a.fair.r2 != null ? a.fair.r2.toFixed(2).replace('.', ',') : '–'}. „Unterbewertet“ = Marktwert liegt deutlich unter dem Modellwert.</dd>
+      <dt>Marktwert-Trend</dt>
+      <dd>50 % letzte Tagesänderung + 30 % Ø der letzten 3 Tage + 20 % Ø der letzten 14 Tage. Signale: „Hoch überschritten“ (fällt nach Anstieg nahe am 92-Tage-Hoch), „Trendwende nach oben“ usw.</dd>
       <dt>Kauf-Score (0–100)</dt>
       <dd>35 % Saison-Erwartung, 20 % Punkte je Mio., 20 % Unterbewertung, 15 % Marktwert-Momentum, 10 % Restprogramm (nächste 3 Gegner). Abzüge bei Verletzung/geringer Einsatzchance. Alles als Perzentil gegen die ganze Liga.</dd>
       <dt>Gebotsvorschlag</dt>
-      <dd>Preis bzw. hochgerechneter Marktwert bei Ablauf + 1–6 % Aufschlag je nach Score, gedeckelt beim fairen Marktwert (max. +20 %).</dd>
+      <dd>Preis bzw. hochgerechneter Marktwert bei Ablauf + 1–6 % Aufschlag je nach Score + 2 % je Konkurrenzgebot (max. +8 %), gedeckelt beim fairen Marktwert (max. +20 %).</dd>
       <dt>Verkaufs-Score</dt>
       <dd>Schwache Saison-Erwartung, fallender Marktwert, Überbewertung, schweres Programm, Bankplatz, Verletzung.</dd>
     </dl>
@@ -602,6 +635,7 @@ function viewInfo() {
   <section class="card"><h2>Datenschutz</h2>
     <p class="small">Keine eigenen Server, kein Tracking. Deine Kickbase-Daten werden nur im Arbeitsspeicher dieses Tabs verarbeitet. <a href="datenschutz.html">Datenschutzerklärung</a></p>
     <p class="small muted">Inoffizielles Fan-Projekt. Nicht mit Kickbase verbunden oder von Kickbase unterstützt. „Kickbase“ ist eine Marke der jeweiligen Inhaber.</p>
+    <p class="small muted">Version ${APP_VERSION}</p>
   </section>`;
 }
 
@@ -637,9 +671,11 @@ async function openPlayer(id) {
       ${stat('Kauf-Score', p.buyScore)}
       ${p.mine ? stat('Verkaufs-Score', p.sellScore) : ''}
     </div>
-    ${p.market ? `<div class="bid ${p.affordable ? '' : 'warn'}"><span>Gebotsvorschlag <b>${eur(p.bid)}</b> · max. ${eur(p.bidMax)} · läuft ab in ${countdown(p.market.exs)}</span></div>` : ''}
+    ${p.market ? `<div class="bid ${p.affordable ? '' : 'warn'}"><span>Gebotsvorschlag <b>${eur(p.bid)}</b> · max. ${eur(p.bidMax)} · läuft ab in ${countdown(p.market.exs)}</span>${p.market.offers ? `<small>${p.market.offers} Konkurrenzgebot(e) → Aufschlag +${Math.min(8, 2 * p.market.offers)} %</small>` : ''}</div>` : ''}
+    <h3>Prognose-Grundlage</h3>
+    ${basisTable(p)}
     <h3>Nächste Spiele</h3>
-    <ul class="fixtures">${p.fixtures.slice(0, 4).map((f) => `<li><span>ST ${f.day}</span><span>${fixtureText(f, a.teams)}</span><span class="muted small">${f.odds ? 'Quote' : 'Tabelle'}</span></li>`).join('') || '<li class="muted">–</li>'}</ul>
+    <ul class="fixtures">${p.fixtures.slice(0, 4).map((f) => `<li><span>ST ${f.day}</span><span>${fixtureText(f, a.teams)}<br><small class="muted">erw. Tore ${num1(f.xgFor)} : ${num1(f.xgAgainst)} · zu Null ${Math.round(f.cs * 100)} %</small></span><span class="muted small">${f.odds ? 'Quote + Modell' : 'Modell'}</span></li>`).join('') || '<li class="muted">–</li>'}</ul>
     <div class="row-between"><h3>Marktwert</h3><div class="seg small" role="group"><button data-action="mvRange" data-v="92" class="on">3 Monate</button><button data-action="mvRange" data-v="365">1 Jahr</button></div></div>
     <div id="mvChart"><p class="muted">Lade …</p></div>
     <h3>Punkte je Spieltag</h3>

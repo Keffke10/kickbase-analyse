@@ -10,7 +10,7 @@ function niceTicks(min, max, count = 4) {
   const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= step0);
   const lo = Math.floor(min / step) * step;
   const ticks = [];
-  for (let v = lo; v <= max + step * 0.5; v += step) ticks.push(v);
+  for (let v = lo; ticks.length < 2 || ticks[ticks.length - 1] < max; v += step) ticks.push(v);
   return ticks;
 }
 

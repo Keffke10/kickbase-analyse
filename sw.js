@@ -1,8 +1,8 @@
 // Service Worker: cached NUR die App-Dateien, niemals API-Antworten oder persönliche Daten.
-const VERSION = 'kba-v3';
+const VERSION = 'kba-v4';
 const SHELL = [
   './', 'index.html', 'datenschutz.html', 'css/app.css',
-  'js/app.js', 'js/api.js', 'js/model.js', 'js/charts.js', 'js/util.js',
+  'js/app.js', 'js/api.js', 'js/model.js', 'js/charts.js', 'js/util.js', 'js/sources.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 

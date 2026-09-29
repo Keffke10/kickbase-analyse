@@ -30,6 +30,19 @@ Kickbase-Konto an.
 
 Wie gerechnet wird, steht in der App unter ⓘ → „So rechnet die App“.
 
+## Datenquellen
+
+| Quelle | Wofür |
+|---|---|
+| Kickbase – Liga, Markt, Kader, Spielplan | Basisdaten, Startelf-Prognose, Verletzungen, Wettquoten, Ergebnisse |
+| Kickbase – Leistungshistorie je Spieler | Vorsaison-Ø als Prior (geglätteter Ø), Startelf-Quote → Einsatzchance |
+| Kickbase – Marktwertverlauf 92 Tage | 3-/14-Tage-Trend, Trendwende-Signale → MW-Prognose, Gebote |
+| Kickbase – Gebote anderer Manager | Aufschlag im Gebotsvorschlag |
+| [OpenLigaDB](https://www.openligadb.de) – Abschlusstabellen Vorsaison (1. + 2. Liga) | Stärke-Prior im Tor-Modell (Poisson: erwartete Tore, Siegchance, Zu-Null-Chance) |
+
+Geladen werden Historie und MW-Verlauf automatisch für eigenen Kader und Transfermarkt; die
+„Tiefenanalyse“ im Spieler-Tab lädt die Historie aller Spieler nach (ca. 25 MB).
+
 ## Lokal starten
 
 ```bash

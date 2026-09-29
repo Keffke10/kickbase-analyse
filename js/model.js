@@ -3,6 +3,7 @@
 
 import { pool } from './api.js';
 import { clamp, mean } from './util.js';
+import { fetchPrevTables, teamRatings, matchModel, playerHistory, blendedAverage, mvTrend } from './sources.js';
 
 export const FORMATIONS = ['3-4-3', '3-5-2', '3-6-1', '4-2-4', '4-3-3', '4-4-2', '4-5-1', '5-2-3', '5-3-2', '5-4-1'];
 
@@ -40,39 +41,50 @@ export async function loadLeague(kb, onProgress = () => {}) {
     kb.myEleven().catch(() => null),
   ]);
 
-  onProgress('Alle Bundesliga-Kader laden …', 0.15);
+  // Externe Quelle (OpenLigaDB) parallel laden – optional
+  const firstMatch = matchdays.it.flatMap((d) => d.it).map((m) => m.dt).sort()[0];
+  const seasonStart = firstMatch ? new Date(firstMatch).getFullYear() : new Date().getFullYear();
+  const prevTablesP = fetchPrevTables(seasonStart);
+
+  onProgress('Alle Bundesliga-Kader laden …', 0.12);
   const tids = table.it.map((t) => t.tid);
-  const profiles = await pool(tids, 6, (tid) => kb.teamProfile(tid), (d, n) => onProgress(`Vereine ${d}/${n} …`, 0.15 + 0.35 * (d / n)));
+  const profiles = await pool(tids, 6, (tid) => kb.teamProfile(tid), (d, n) => onProgress(`Vereine ${d}/${n} …`, 0.12 + 0.28 * (d / n)));
 
-  // Detaildaten (Form der letzten Spiele) für eigene Spieler + Transfermarkt
+  // Detaildaten, Leistungshistorie & MW-Verlauf für eigene Spieler + Transfermarkt
   const detailIds = [...new Set([...squad.it.map((p) => p.i), ...market.it.map((p) => p.i)])];
-  const details = await pool(detailIds, 6, (pid) => kb.player(pid), (d, n) => onProgress(`Spielerform ${d}/${n} …`, 0.5 + 0.5 * (d / n)));
-  const detailMap = new Map();
-  detailIds.forEach((id, i) => details[i] && detailMap.set(id, details[i]));
-
-  return { me, overview, squad, market, ranking, table, matchdays, eleven, profiles: profiles.filter(Boolean), detailMap, loadedAt: Date.now() };
+  const raw = {
+    me, overview, squad, market, ranking, table, matchdays, eleven, profiles: profiles.filter(Boolean),
+    detailMap: new Map(), perfMap: new Map(), mvMap: new Map(), loadedAt: Date.now(),
+  };
+  await loadPlayerData(kb, raw, detailIds, { mv: true }, (d, n) => onProgress(`Spielerdaten ${d}/${n} …`, 0.4 + 0.58 * (d / n)));
+  raw.prevTables = await prevTablesP;
+  return raw;
 }
 
-/** Optional: Detaildaten für alle Spieler nachladen (Tiefenanalyse). */
+/** Lädt Detail, Leistungshistorie (und optional MW-Verlauf) für die angegebenen Spieler. */
+async function loadPlayerData(kb, raw, ids, { mv = false } = {}, onProgress) {
+  await pool(ids, 6, async (pid) => {
+    const [d, perf, hist] = await Promise.all([
+      raw.detailMap.has(pid) ? null : kb.player(pid).catch(() => null),
+      raw.perfMap.has(pid) ? null : kb.performance(pid).catch(() => null),
+      mv && !raw.mvMap.has(pid) ? kb.marketValue(pid, 92).catch(() => null) : null,
+    ]);
+    if (d) raw.detailMap.set(pid, d);
+    if (perf) raw.perfMap.set(pid, perf);
+    if (hist) raw.mvMap.set(pid, hist);
+  }, onProgress);
+}
+
+/** Optional: Detaildaten & Historie für alle Spieler nachladen (Tiefenanalyse, ca. 25 MB). */
 export async function loadAllDetails(kb, raw, onProgress) {
   const ids = [];
-  for (const tp of raw.profiles) for (const p of tp.it) if (!raw.detailMap.has(p.i)) ids.push(p.i);
-  const res = await pool(ids, 6, (pid) => kb.player(pid), (d, n) => onProgress?.(`Spieler ${d}/${n} …`, d / n));
-  ids.forEach((id, i) => res[i] && raw.detailMap.set(id, res[i]));
+  for (const tp of raw.profiles) for (const p of tp.it) if (!raw.detailMap.has(p.i) || !raw.perfMap.has(p.i)) ids.push(p.i);
+  await loadPlayerData(kb, raw, ids, {}, (d, n) => onProgress?.(`Spieler ${d}/${n} …`, d / n));
 }
 
 // ---------------------------------------------------------------- Spielplan / Gegnerstärke
 
-function logistic(x) { return 1 / (1 + Math.exp(-x)); }
-
-function buildFixtures(matchdays, table) {
-  const teams = new Map(table.it.map((t) => [t.tid, t]));
-  const rating = (tid) => {
-    const t = teams.get(tid);
-    if (!t || !t.mc) return 0;
-    return (t.cp + 0.5 * t.gd) / t.mc;
-  };
-
+function buildFixtures(matchdays, tr) {
   const days = matchdays.it.slice().sort((a, b) => a.day - b.day);
   const upcoming = days.filter((d) => d.it.some((m) => m.st !== 2));
   const nextDay = upcoming[0]?.day ?? null;
@@ -87,23 +99,20 @@ function buildFixtures(matchdays, table) {
   for (const d of upcoming.slice(0, 5)) {
     for (const m of d.it) {
       if (m.st === 2) continue;
-      let pH, pD, pA, odds = false;
+      // Tor-Modell (Kickbase-Ergebnisse + OpenLigaDB-Vorsaison); Wettquoten haben Vorrang (70 %)
+      const mm = matchModel(tr, m.t1, m.t2) || { lh: tr.base, la: tr.base, pH: 0.45, pD: 0.25, pA: 0.3 };
+      let pH = mm.pH, pD = mm.pD, pA = mm.pA, odds = false;
       if (m.bo && m.bo.o1 && m.bo.ox && m.bo.o2) {
         const a = 1 / m.bo.o1, b = 1 / m.bo.ox, c = 1 / m.bo.o2, s = a + b + c;
-        pH = a / s; pD = b / s; pA = c / s; odds = true;
-      } else {
-        const diff = rating(m.t1) - rating(m.t2) + 0.3; // Heimvorteil
-        const nonDraw = 0.74;
-        pH = logistic(1.3 * diff) * nonDraw;
-        pA = nonDraw - pH;
-        pD = 1 - nonDraw;
+        pH = 0.7 * (a / s) + 0.3 * mm.pH; pD = 0.7 * (b / s) + 0.3 * mm.pD; pA = 0.7 * (c / s) + 0.3 * mm.pA;
+        odds = true;
       }
-      const push = (tid, opp, home, win, draw, loss) => {
+      const push = (tid, opp, home, win, draw, loss, xgFor, xgAgainst) => {
         if (!fixtures.has(tid)) fixtures.set(tid, []);
-        fixtures.get(tid).push({ day: d.day, opp, home, dt: m.dt, win, draw, loss, odds });
+        fixtures.get(tid).push({ day: d.day, opp, home, dt: m.dt, win, draw, loss, odds, xgFor, xgAgainst, cs: Math.exp(-xgAgainst) });
       };
-      push(m.t1, m.t2, true, pH, pD, pA);
-      push(m.t2, m.t1, false, pA, pD, pH);
+      push(m.t1, m.t2, true, pH, pD, pA, mm.lh, mm.la);
+      push(m.t2, m.t1, false, pA, pD, pH, mm.la, mm.lh);
     }
   }
   const finished = days.filter((d) => d.it.every((m) => m.st === 2));
@@ -111,10 +120,18 @@ function buildFixtures(matchdays, table) {
   return { fixtures, nextDay, symbols, lastDate, nextDate: upcoming[0]?.it.map((m) => m.dt).sort()[0] ?? null };
 }
 
-/** Punkte-Multiplikator aus erwartetem Spielausgang (≈0,85 … 1,18). */
-function fixtureMult(f) {
+/**
+ * Punkte-Multiplikator aus erwartetem Spielausgang (≈0,85 … 1,18) und positionsabhängig
+ * aus dem Tor-Modell: TW/ABW profitieren von "zu Null", MF/ST von vielen eigenen Toren.
+ */
+function fixtureMult(f, pos, base) {
   if (!f) return 1;
-  return 0.75 + 0.5 * (f.win + 0.5 * f.draw);
+  const result = 0.75 + 0.5 * (f.win + 0.5 * f.draw);
+  const csAvg = Math.exp(-base);
+  const posAdj = pos <= 2
+    ? clamp(0.9 + 0.1 * (f.cs / csAvg), 0.9, 1.15)
+    : clamp(0.9 + 0.1 * (f.xgFor / base), 0.9, 1.15);
+  return result * posAdj;
 }
 
 // ---------------------------------------------------------------- Regression (fairer Marktwert)
@@ -150,8 +167,8 @@ function ols(X, y, ridge = 1e-3) {
   return solve(XtX, Xty);
 }
 
-function features(p) {
-  const ap = Math.max(p.ap ?? 0, 0);
+function features(p, useAdjusted = false) {
+  const ap = Math.max((useAdjusted ? p.apAdj ?? p.ap : p.ap) ?? 0, 0);
   return [p.pos === 1 ? 1 : 0, p.pos === 2 ? 1 : 0, p.pos === 3 ? 1 : 0, p.pos === 4 ? 1 : 0,
     Math.sqrt(ap), p.availSeason, Math.sqrt(ap) * p.availSeason];
 }
@@ -167,14 +184,15 @@ function fitFairValue(players) {
   const y = train.map((p) => Math.log(p.mv));
   const beta = ols(X, y);
   if (!beta) return { predict: () => null, r2: null, n: train.length };
-  const pred = (p) => features(p).reduce((s, x, i) => s + x * beta[i], 0);
+  const pred = (p, adj = false) => features(p, adj).reduce((s, x, i) => s + x * beta[i], 0);
   const res = train.map((p, i) => y[i] - pred(p));
   const smear = mean(res.map(Math.exp)); // Duan-Smearing für Rücktransformation
   const my = mean(y);
   const ssTot = y.reduce((s, v) => s + (v - my) ** 2, 0);
   const ssRes = res.reduce((s, v) => s + v * v, 0);
   return {
-    predict: (p) => (p.ap == null ? null : Math.max(500000, Math.exp(pred(p)) * smear)),
+    // Vorhersage mit dem geglätteten Ø (inkl. Vorsaison), sofern vorhanden
+    predict: (p) => ((p.apAdj ?? p.ap) == null ? null : Math.max(500000, Math.exp(pred(p, true)) * smear)),
     r2: 1 - ssRes / ssTot,
     n: train.length,
   };
@@ -215,7 +233,8 @@ export function optimalLineup(players, key = 'xp') {
 // ---------------------------------------------------------------- Hauptanalyse
 
 export function analyze(raw, myUserId) {
-  const { fixtures, nextDay, symbols, nextDate, lastDate } = buildFixtures(raw.matchdays, raw.table);
+  const tr = teamRatings(raw.matchdays, raw.table, raw.prevTables);
+  const { fixtures, nextDay, symbols, nextDate, lastDate } = buildFixtures(raw.matchdays, tr);
   // Tage seit dem letzten Spieltag (Kickbase liefert die MW-Änderung seit dem Spieltag)
   const daysSinceMd = lastDate ? clamp((Date.now() - new Date(lastDate).getTime()) / 864e5, 1, 60) : 7;
   const teamMap = new Map(raw.table.it.map((t) => [t.tid, { ...t, sy: symbols.get(t.tid) || t.tn.slice(0, 3).toUpperCase() }]));
@@ -284,9 +303,20 @@ export function analyze(raw, myUserId) {
     if (p.ownerId && !p.ownerName) p.ownerName = managers.get(p.ownerId)?.n ?? null;
     p.games = p.totalPts != null && p.ap ? Math.round(p.totalPts / p.ap) : null;
 
-    // Einsatzwahrscheinlichkeiten
-    p.availNext = (PROB_FACTOR[p.prob] ?? 0.6) * nextMatchFactor(p.st);
-    p.availSeason = clamp((PROB_FACTOR[p.prob] ?? 0.6) * 0.6 + 0.4, 0, 1) * seasonFactor(p.st);
+    // Leistungshistorie: Vorsaison als Prior für den (früh in der Saison wackeligen) Ø
+    p.hist = playerHistory(raw.perfMap.get(p.id));
+    const blended = blendedAverage(p.ap, p.hist?.cur?.games ?? p.games, p.hist);
+    p.apAdj = blended.value;
+    p.priorWeight = blended.weight;
+
+    // Einsatzwahrscheinlichkeiten: Kickbase-Prognose, ergänzt um die tatsächliche Startelf-Quote
+    const probF = PROB_FACTOR[p.prob];
+    const cur = p.hist?.cur;
+    p.startShare = cur && cur.recentGames >= 2 ? cur.recentStarts / cur.recentGames : null;
+    let avail = probF ?? 0.6;
+    if (p.startShare != null) avail = probF != null ? 0.75 * probF + 0.25 * p.startShare : 0.4 + 0.5 * p.startShare;
+    p.availNext = avail * nextMatchFactor(p.st);
+    p.availSeason = clamp(avail * 0.6 + 0.4, 0, 1) * seasonFactor(p.st);
 
     // Spielplan
     p.fixtures = fixtures.get(p.tid) || [];
@@ -295,14 +325,17 @@ export function analyze(raw, myUserId) {
     p.fixEase = p.fixtures.length ? mean(p.fixtures.slice(0, 3).map((f) => f.win + 0.5 * f.draw)) : 0.5;
 
     // Erwartete Punkte
-    const base = p.form != null && p.ap != null ? 0.55 * p.form + 0.45 * p.ap : (p.form ?? p.ap ?? 0);
+    const avgPts = p.apAdj ?? p.ap;
+    const base = p.form != null && avgPts != null ? 0.55 * p.form + 0.45 * avgPts : (p.form ?? avgPts ?? 0);
     p.base = base;
-    p.xp = nextFix ? (base > 0 ? base * fixtureMult(nextFix) : base) * p.availNext : 0;
-    const seasonBase = p.ap ?? p.form ?? 0;
+    p.xp = nextFix ? (base > 0 ? base * fixtureMult(nextFix, p.pos, tr.base) : base) * p.availNext : 0;
+    const seasonBase = avgPts ?? p.form ?? 0;
     p.xs = (seasonBase > 0 ? seasonBase * (0.75 + 0.5 * p.fixEase) : seasonBase) * p.availSeason;
 
-    // Marktwert-Trend (€/Tag)
+    // Marktwert-Trend (€/Tag): letzter Tag, ergänzt um 3- und 14-Tage-Steigung aus dem Verlauf
     p.daily = p.mv24 ?? (p.mvMd != null ? p.mvMd / daysSinceMd : 0);
+    p.mvTrend = mvTrend(raw.mvMap.get(p.id));
+    if (p.mvTrend) p.daily = 0.5 * p.daily + 0.3 * p.mvTrend.s3 + 0.2 * p.mvTrend.s14;
     // Momentum: relative Änderung seit Spieltag, auf 7 Tage normiert
     p.mom = p.mv ? clamp(((p.mvMd ?? p.daily * daysSinceMd) / daysSinceMd) * 7 / p.mv, -0.5, 0.5) : 0;
     p.mvIn7 = p.mv + p.daily * 7 * 0.7; // gedämpfte Fortschreibung
@@ -358,7 +391,8 @@ export function analyze(raw, myUserId) {
     p.buyLabel = p.buyScore >= 70 ? 'Top-Kauf' : p.buyScore >= 56 ? 'Kaufen' : p.buyScore >= 42 ? 'Beobachten' : 'Meiden';
     const days = (p.market.exs || 0) / 86400;
     const projected = p.mv + Math.max(0, p.daily) * days;
-    const premium = p.buyScore >= 70 ? 0.06 : p.buyScore >= 56 ? 0.03 : 0.01;
+    // Konkurrenz: jedes vorliegende Gebot anderer Manager erhöht den nötigen Aufschlag
+    const premium = (p.buyScore >= 70 ? 0.06 : p.buyScore >= 56 ? 0.03 : 0.01) + Math.min(0.08, 0.02 * (p.market.offers || 0));
     const floor = Math.max(p.market.price, projected);
     const cap = Math.max(p.market.price, Math.min(p.fair ?? p.mv, p.mv * 1.2));
     let bid = floor * (1 + premium);
@@ -398,7 +432,13 @@ export function analyze(raw, myUserId) {
   }
 
   return {
-    players, all, mine, market, lineup, fixtures, mvUpdate: raw.market.mvud || null,
+    players, all, mine, market, lineup, fixtures, mvUpdate: raw.market.mvud || null, teamRatings: tr,
+    sources: {
+      openLigaDb: raw.prevTables ? raw.prevTables.season : null,
+      history: raw.perfMap.size,
+      mvHistory: raw.mvMap.size,
+      details: raw.detailMap.size,
+    },
     myBids: market.filter((p) => p.market.myBid), currentXI: current, swaps: topSwaps, rescue,
     budget, teamValue: mine.reduce((s, p) => s + p.mv, 0),
     nextDay, nextDate, lastDate, daysSinceMd, teams: teamMap, managers, fair,

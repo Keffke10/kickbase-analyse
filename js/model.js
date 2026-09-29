@@ -10,6 +10,18 @@ export const FORMATIONS = ['3-4-3', '3-5-2', '3-6-1', '4-2-4', '4-3-3', '4-4-2',
 // Einsatzfaktoren (Annahmen, siehe "So rechnet die App")
 const PROB_FACTOR = { 1: 1, 2: 0.85, 3: 0.55, 4: 0.2, 5: 0.03 };
 const CRIT_BITS = 1 | 8 | 16 | 32 | 64 | 128 | 256;
+const TREND_EPS = 0.002; // ab ±0,2 % pro Tag gilt ein Marktwert als steigend/fallend
+const MD_SOON_HOURS = 48; // "Spieltag steht an"
+const TRADING_REL = 0.02; // ab +2 % MW pro Tag lohnt sich ein reiner Wert-Kauf
+const POINT_EUR = 20000; // Heuristik: Wert eines erwarteten Spieltagspunkts in € (für Budget-Ausgleich)
+
+function statusText(p) {
+  if (p.st & 1) return 'verletzt';
+  if (p.st & (8 | 16 | 32)) return 'gesperrt';
+  if (p.st & (64 | 128 | 256)) return 'nicht verfügbar';
+  if (p.prob >= 5) return 'kein Einsatz erwartet';
+  return 'eingeschränkt';
+}
 
 function nextMatchFactor(st) {
   if (!st) return 1;
@@ -364,11 +376,6 @@ export function analyze(raw, myUserId) {
 
   for (const p of all) {
     p.q = { xs: qXs(p.xs), eff: qEff(p.eff), gap: qGap(p.gap ?? 0), mom: qMom(p.mom), fix: qFix(p.fixEase) };
-    let buy = 100 * (0.35 * p.q.xs + 0.2 * p.q.eff + 0.2 * p.q.gap + 0.15 * p.q.mom + 0.1 * p.q.fix);
-    if (p.st & CRIT_BITS) buy *= 0.6;
-    if (p.prob >= 4) buy *= 0.7;
-    if (p.ap == null) buy *= 0.5;
-    p.buyScore = Math.round(buy);
   }
 
   // Eigener Kader & Aufstellung
@@ -377,23 +384,104 @@ export function analyze(raw, myUserId) {
   const xiIds = new Set(lineup?.xi.map((p) => p.id) || []);
   const current = new Set((raw.eleven?.lp || []).map((p) => p.i));
 
+  const budget = raw.me.b;
+  const hoursToMd = nextDate ? (new Date(nextDate) - Date.now()) / 36e5 : null;
+  const mdSoon = hoursToMd != null && hoursToMd <= MD_SOON_HOURS; // "Spieltag steht an"
+  const daysToMd = hoursToMd != null ? Math.max(0.5, hoursToMd / 24) : 7;
+
+  // ---- Verkaufs-Empfehlung eigener Spieler
+  // Grundsatz: Steigt der Marktwert, ist ein Verkauf sinnlos – außer das Budget ist negativ und der Spieltag
+  // steht an. Fällt er, sollte vor dem nächsten MW-Update verkauft werden (sofern der Spieler entbehrlich ist).
   for (const p of mine) {
     p.inBestXI = xiIds.has(p.id);
     p.inCurrentXI = current.has(p.id);
-    let sell = 100 * (0.3 * (1 - p.q.xs) + 0.25 * (1 - p.q.mom) + 0.2 * (1 - p.q.gap) + 0.1 * (1 - p.q.fix));
-    if (!p.inBestXI) sell += 10;
-    if (p.st & CRIT_BITS) sell += 10;
-    if (p.prob >= 4) sell += 8;
+    const rel = p.mv ? p.daily / p.mv : 0; // relative MW-Änderung pro Tag
+    p.mvRel = rel;
+    const rising = rel > TREND_EPS;
+    const falling = rel < -TREND_EPS;
+    const peak = p.mvTrend?.signal === 'Hoch überschritten';
+    const injured = (p.st & CRIT_BITS) || p.prob >= 5;
+    const reasons = [];
+    let sell = 0;
+    if (falling) { sell += clamp(-rel * 100 * 12, 5, 40); reasons.push(['neg', `MW fällt (${(rel * 100).toFixed(1).replace('.', ',')} %/Tag)`]); }
+    if (peak) { sell += 15; reasons.push(['neg', 'Marktwert-Hoch überschritten']); }
+    if (!p.inBestXI) { sell += 15; reasons.push(['neg', 'nicht in deiner besten Elf']); }
+    if (p.q.xs < 0.35) { sell += 10; reasons.push(['neg', 'schwache Punkteerwartung']); }
+    if (injured) { sell += 10; reasons.push(['neg', statusText(p)]); }
+    if (p.gap != null && p.gap < -0.25) { sell += 10; reasons.push(['neg', 'deutlich überbewertet']); }
+    if (p.inBestXI) { sell -= 15; reasons.push(['pos', `Stammspieler deiner Elf (${Math.round(p.xp)} Pkt erw.)`]); }
+    if (rising) {
+      sell = Math.min(sell, 20);
+      reasons.unshift(['pos', `MW steigt (+${(rel * 100).toFixed(1).replace('.', ',')} %/Tag) – Wertzuwachs mitnehmen`]);
+    }
     p.sellScore = Math.round(clamp(sell, 0, 100));
-    p.sellLabel = p.sellScore >= 62 ? 'Verkaufen' : p.sellScore >= 48 ? 'Verkauf prüfen' : 'Halten';
+    p.sellLabel = rising ? 'Halten – steigt' : p.sellScore >= 50 ? 'Verkaufen' : p.sellScore >= 30 ? 'Verkauf prüfen' : 'Halten';
+    p.sellReasons = reasons;
+    p.sellTiming = rising ? 'Wenn überhaupt: erst nach dem nächsten MW-Update verkaufen.'
+      : falling && p.sellScore >= 30 ? 'Vor dem nächsten MW-Update verkaufen – danach ist er weniger wert.' : null;
   }
 
-  const budget = raw.me.b;
+  // ---- Budget-Ausgleich: nur nötig, wenn der Kontostand negativ ist
+  let rescue = null;
+  if (budget < 0) {
+    // "Schmerz" eines Verkaufs in €: entgangene Punkte (nur Stammelf) + entgangener Wertzuwachs bis zum Spieltag;
+    // fallende Spieler abzugeben spart sogar Verlust (negativer Beitrag). Bewertet je freigesetztem Euro.
+    const pain = (p) => (p.inBestXI ? p.xp * POINT_EUR : 0) + p.daily * daysToMd;
+    const cands = mine.slice().sort((x, y) => pain(x) / x.mv - pain(y) / y.mv);
+    const need = -budget;
+    let covered = 0;
+    const pick = [];
+    for (const p of cands) { if (covered >= need) break; pick.push(p); covered += p.mv; }
+    // Überflüssige Verkäufe wieder streichen (teuerste zuerst prüfen)
+    for (const p of pick.slice().sort((x, y) => pain(y) - pain(x))) {
+      if (covered - p.mv >= need) { pick.splice(pick.indexOf(p), 1); covered -= p.mv; }
+    }
+    for (const p of pick) {
+      p.sellLabel = mdSoon ? 'Verkaufen (Budget)' : 'Bis Spieltag verkaufen';
+      p.sellReasons = [['neg', `Budget ausgleichen (${(-budget / 1e6).toFixed(2).replace('.', ',')} Mio. fehlen)`], ...p.sellReasons];
+      p.sellTiming = p.daily > 0
+        ? 'Steigt noch: möglichst spät verkaufen, aber vor Anpfiff.'
+        : 'Fällt: vor dem nächsten MW-Update verkaufen.';
+    }
+    rescue = { need, covered, pick, urgent: mdSoon, hoursToMd };
+  }
 
-  // Transfermarkt-Empfehlungen
+  // ---- Kauf-Empfehlungen (alle Spieler, damit Markt und Spieler-Datenbank gleich bewerten)
+  const baseTotal = lineup?.total ?? 0;
+  for (const p of all) {
+    // Wie sehr würde der Spieler deine beste Elf verbessern?
+    p.xiGain = p.mine ? 0 : Math.max(0, (optimalLineup([...mine, p], 'xp')?.total ?? baseTotal) - baseTotal);
+    const rel = p.mv ? p.daily / p.mv : 0;
+    p.mvRel = rel;
+    let buy = 100 * (0.3 * p.q.xs + 0.15 * p.q.eff + 0.15 * p.q.gap + 0.2 * p.q.mom + 0.1 * p.q.fix + 0.1 * clamp(p.xiGain / 40, 0, 1));
+    if (p.st & CRIT_BITS) buy *= 0.6;
+    if (p.prob >= 4) buy *= 0.7;
+    if (p.ap == null) buy *= 0.5;
+    p.buyScore = Math.round(buy);
+    const reasons = [];
+    if (p.xiGain >= 5) reasons.push(['pos', `stärkt deine Elf um +${Math.round(p.xiGain)} Pkt`]);
+    if (rel > TREND_EPS) reasons.push(['pos', `MW steigt (+${(rel * 100).toFixed(1).replace('.', ',')} %/Tag)`]);
+    if (rel < -TREND_EPS) reasons.push(['neg', `MW fällt (${(rel * 100).toFixed(1).replace('.', ',')} %/Tag)`]);
+    if (p.gap != null && p.gap > 0.15) reasons.push(['pos', p.gap > 1 ? 'stark unterbewertet' : `unterbewertet (${Math.round(p.gap * 100)} %)`]);
+    if (p.gap != null && p.gap < -0.2) reasons.push(['neg', 'überbewertet']);
+    if (p.q.fix > 0.7) reasons.push(['pos', 'leichtes Restprogramm']);
+    if (p.st & CRIT_BITS) reasons.push(['neg', statusText(p)]);
+    p.buyReasons = reasons;
+    let label = p.buyScore >= 70 ? 'Top-Kauf' : p.buyScore >= 56 ? 'Kaufen' : p.buyScore >= 42 ? 'Beobachten' : 'Meiden';
+    // Fällt der Marktwert deutlich, wird er morgen billiger: abwarten statt kaufen
+    if (rel < -0.01 && /Kauf/.test(label)) label = 'Abwarten (MW fällt)';
+    // Reines Wertgeschäft: kaum Punkte, aber stark steigender Marktwert → kaufen, halten, teurer verkaufen
+    p.trading = !/Kauf/.test(label) && rel >= TRADING_REL && !(p.st & CRIT_BITS);
+    if (p.trading) {
+      label = 'Trading-Kauf';
+      reasons.unshift(['pos', `ca. +${(p.daily * 3 / 1e6).toFixed(2).replace('.', ',')} Mio. Wertzuwachs in 3 Tagen erwartet`]);
+    }
+    p.buyLabel = label;
+  }
+
+  // ---- Gebotsvorschläge (Transfermarkt)
   const market = all.filter((p) => p.market);
   for (const p of market) {
-    p.buyLabel = p.buyScore >= 70 ? 'Top-Kauf' : p.buyScore >= 56 ? 'Kaufen' : p.buyScore >= 42 ? 'Beobachten' : 'Meiden';
     const days = (p.market.exs || 0) / 86400;
     const projected = p.mv + Math.max(0, p.daily) * days;
     // Konkurrenz: jedes vorliegende Gebot anderer Manager erhöht den nötigen Aufschlag
@@ -402,16 +490,23 @@ export function analyze(raw, myUserId) {
     const cap = Math.max(p.market.price, Math.min(p.fair ?? p.mv, p.mv * 1.2));
     let bid = floor * (1 + premium);
     if (bid > cap && p.buyScore < 70) bid = Math.max(floor, cap);
+    if (p.trading) {
+      // Beim Trading höchstens die Hälfte des erwarteten 3-Tage-Zuwachses als Aufschlag zahlen
+      const tradeCap = Math.max(p.market.price, p.mv + 0.5 * p.daily * 3);
+      bid = Math.min(Math.max(p.market.price, projected) * (1 + Math.min(0.08, 0.02 * (p.market.offers || 0))), tradeCap);
+      p.bidMaxOverride = tradeCap;
+    }
     p.bid = Math.ceil(bid / 10000) * 10000;
-    p.bidMax = Math.ceil(Math.max(cap, p.bid) / 10000) * 10000;
+    p.bidMax = Math.ceil(Math.max(p.bidMaxOverride ?? cap, p.bid) / 10000) * 10000;
     p.affordable = p.bid <= budget;
     if (p.market.myBid) p.bidStatus = p.market.myBid < p.market.price ? 'zu niedrig' : p.market.myBid < p.bid ? 'unter Vorschlag' : p.market.myBid > p.bidMax ? 'über Maximum' : 'passt';
   }
 
   // Tauschvorschläge: Verkaufe X, kaufe Y (gleiche Position, bessere Erwartung)
   const swaps = [];
-  for (const buy of market.filter((p) => !p.mine && p.buyScore >= 50)) {
-    for (const sell of mine.filter((p) => p.pos === buy.pos)) {
+  for (const buy of market.filter((p) => !p.mine && p.buyScore >= 50 && !/Abwarten/.test(p.buyLabel))) {
+    // Steigende Spieler nicht zum Tausch vorschlagen (Wertzuwachs mitnehmen)
+    for (const sell of mine.filter((p) => p.pos === buy.pos && !/steigt/.test(p.sellLabel))) {
       const gain = buy.xs - sell.xs;
       if (gain <= 5) continue;
       const net = buy.bid - sell.mv;
@@ -427,16 +522,8 @@ export function analyze(raw, myUserId) {
     if (topSwaps.length >= 6) break;
   }
 
-  // Budget-Rettung: falls Kontostand negativ, günstigste Verkäufe mit geringstem Punkteverlust
-  let rescue = null;
-  if (budget < 0) {
-    const cands = mine.slice().sort((a, b) => (a.xs / (a.mv || 1)) - (b.xs / (b.mv || 1)));
-    let need = -budget; const pick = [];
-    for (const p of cands) { if (need <= 0) break; pick.push(p); need -= p.mv; }
-    rescue = { need: -budget, pick };
-  }
-
   return {
+    mdSoon, hoursToMd,
     players, all, mine, market, lineup, fixtures, mvUpdate: raw.market.mvud || null, teamRatings: tr,
     sources: {
       openLigaDb: raw.prevTables ? raw.prevTables.season : null,

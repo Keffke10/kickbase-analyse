@@ -5,7 +5,7 @@ import {
   esc, img, num, num1, eur, signedEur, pct, deltaClass, POS, POS_LONG, statusInfo, PROB, countdown, dateTime, ago, mean,
 } from './util.js';
 
-const APP_VERSION = '0.2';
+const APP_VERSION = '0.3-dev';
 
 // ------------------------------------------------------------ Sitzung (nur Token, niemals Passwort)
 
@@ -105,8 +105,16 @@ function gapBadge(p) {
   return `<span class="${cls}">${pct(p.gap, 0)} <small>${word}</small></span>`;
 }
 
+/** Begründungen als kompakte Liste (grün = spricht dafür, rot = spricht dagegen). */
+function reasonsHtml(reasons, max = 4) {
+  if (!reasons?.length) return '';
+  return `<ul class="reasons">${reasons.slice(0, max).map(([l, t]) => `<li class="${l}"><span aria-hidden="true">${l === 'pos' ? '+' : '−'}</span>${esc(t)}</li>`).join('')}</ul>`;
+}
+
 function scoreBadge(score, label) {
-  const lvl = /Top|Kaufen$/.test(label) ? 'good' : /Beobachten|prüfen/.test(label) ? 'warn' : /Verkaufen|Meiden/.test(label) ? 'crit' : 'neutral';
+  const lvl = /Top|Kaufen$|Trading|steigt/.test(label) ? 'good'
+    : /Beobachten|prüfen|Abwarten/.test(label) ? 'warn'
+    : /Verkaufen|verkaufen|Meiden/.test(label) ? 'crit' : 'neutral';
   const icon = lvl === 'good' ? '✓' : lvl === 'warn' ? '◆' : lvl === 'crit' ? '✕' : '·';
   return `<span class="badge ${lvl}"><b>${score}</b> ${icon} ${esc(label)}</span>`;
 }
@@ -252,7 +260,11 @@ function viewHome() {
   const currentXI = a.mine.filter((p) => a.currentXI.has(p.id));
   const curTotal = currentXI.reduce((s, p) => s + p.xp, 0);
   const alerts = [];
-  if (a.budget < 0) alerts.push(['crit', `Budget negativ (${eur(a.budget)}): Bis zum Spieltag ausgleichen, sonst gibt es 0 Punkte.`]);
+  if (a.budget < 0) {
+    alerts.push(a.mdSoon
+      ? ['crit', `Budget negativ (${eur(a.budget)}) und der Spieltag beginnt in ${countdown(secondsToMd)}: jetzt ausgleichen, sonst gibt es 0 Punkte.`]
+      : ['warn', `Budget negativ (${eur(a.budget)}). Bis zum Anpfiff in ${countdown(secondsToMd)} ausgleichen – steigende Spieler dürfen bis dahin weiter steigen.`]);
+  }
   for (const p of currentXI) {
     const st = statusInfo(p.st);
     if (st?.level === 'crit') alerts.push(['crit', `${p.name} steht in deiner Startelf, ist aber ${st.label}.`]);
@@ -263,7 +275,7 @@ function viewHome() {
   if (a.lineup && a.lineup.total - curTotal > 15) alerts.push(['warn', `Optimierte Aufstellung bringt ca. +${num(a.lineup.total - curTotal)} erwartete Punkte.`]);
 
   const buys = a.market.filter((p) => !p.mine && p.buyScore >= 56).sort((x, y) => y.buyScore - x.buyScore).slice(0, 3);
-  const sells = a.mine.filter((p) => p.sellLabel === 'Verkaufen').sort((x, y) => y.sellScore - x.sellScore).slice(0, 3);
+  const sells = a.mine.filter((p) => /^Verkaufen|Bis Spieltag/.test(p.sellLabel)).sort((x, y) => y.sellScore - x.sellScore).slice(0, 3);
   const movers = a.mine.filter((p) => p.mv24).sort((x, y) => Math.abs(y.mv24) - Math.abs(x.mv24)).slice(0, 5);
   const secondsToMv = a.mvUpdate ? (new Date(a.mvUpdate) - Date.now()) / 1000 : null;
   // MW-Trading: steigende Marktspieler früh kaufen, fallende eigene Spieler vor dem Update abgeben
@@ -415,6 +427,7 @@ function marketCard(p) {
   }
   return `<article class="card mcard">
     ${playerRow(p, scoreBadge(p.buyScore, p.buyLabel), `· ${p.market.seller ? `von <b>${esc(p.market.seller.name)}</b>` : 'Kickbase'}`)}
+    ${reasonsHtml(p.buyReasons)}
     <div class="grid4">
       ${stat('Preis', eur(p.market.price))}
       ${stat('Fairer MW', eur(p.fair))}
@@ -457,7 +470,8 @@ function marketActions(p) {
 function viewSquad() {
   const a = state.a;
   const mine = a.mine.slice();
-  const list = state.squadView === 'sell' ? mine.sort((x, y) => y.sellScore - x.sellScore)
+  const rank = (p) => (/Budget|Bis Spieltag/.test(p.sellLabel) ? 0 : p.sellLabel === 'Verkaufen' ? 1 : /prüfen/.test(p.sellLabel) ? 2 : /steigt/.test(p.sellLabel) ? 4 : 3);
+  const list = state.squadView === 'sell' ? mine.sort((x, y) => rank(x) - rank(y) || y.sellScore - x.sellScore)
     : state.squadView === 'pos' ? mine.sort((x, y) => x.pos - y.pos || y.xs - x.xs)
     : mine.sort((x, y) => (y.buyGain ?? 0) - (x.buyGain ?? 0));
   const profit = mine.reduce((s, p) => s + (p.buyGain ?? 0), 0);
@@ -468,15 +482,19 @@ function viewSquad() {
     ${stat('Budget', eur(a.budget), a.budget < 0 ? 'neg' : '')}
     ${stat('Gewinn seit Kauf', signedEur(profit), deltaClass(profit))}
   </section>
-  ${a.rescue ? `<section class="card alert-card"><h2>Budget ausgleichen</h2><p>Dir fehlen <b>${eur(a.rescue.need)}</b>. Verkaufe mit geringstem Punkteverlust:</p>
-    ${a.rescue.pick.map((p) => playerRow(p, `<b>${eur(p.mv)}</b>`)).join('')}</section>` : ''}
+  ${a.rescue ? `<section class="card alert-card"><h2>Budget ausgleichen</h2>
+    <p>Dir fehlen <b>${eur(a.rescue.need)}</b>. ${a.rescue.urgent
+      ? `<b class="neg">Der Spieltag beginnt in ${countdown(a.rescue.hoursToMd * 3600)} – jetzt verkaufen.</b>`
+      : `Anpfiff in ${countdown(a.rescue.hoursToMd * 3600)}: Du hast noch Zeit. Fallende Spieler zuerst abgeben, steigende erst kurz vor dem Spieltag.`}</p>
+    <p class="small muted">Auswahl mit geringstem Verlust an Punkten und Wertzuwachs (Erlös ${eur(a.rescue.covered)}):</p>
+    ${a.rescue.pick.map((p) => `<div class="srow">${playerRow(p, `<b>${eur(p.mv)}</b><small class="${deltaClass(p.daily)}">${signedEur(p.daily)}/Tag</small>`)}<p class="small muted timing">${esc(p.sellTiming || '')}</p></div>`).join('')}</section>` : ''}
   ${a.swaps.length ? `<section class="card"><h2>Tausch-Ideen</h2><p class="small muted">Verkauf + Kauf auf gleicher Position, Budget bleibt ≥ 0.</p>${a.swaps.map(swapRow).join('')}</section>` : ''}
   <section class="card">
     <div class="seg" role="group" aria-label="Sortierung">${[['sell', 'Verkaufsranking'], ['pos', 'Nach Position'], ['gain', 'Gewinn']].map(([v, l]) => `<button data-action="squadView" data-v="${v}" class="${state.squadView === v ? 'on' : ''}">${l}</button>`).join('')}</div>
-    ${list.map((p) => playerRow(p,
-      state.squadView === 'sell' ? `${scoreBadge(p.sellScore, p.sellLabel)}<small>${eur(p.mv)}</small>`
-        : `<b>${eur(p.mv)}</b><small class="${deltaClass(p.buyGain)}">${signedEur(p.buyGain)} seit Kauf</small>`,
-      `· Ø ${num(p.ap)} · ${p.inBestXI ? 'Startelf' : 'Bank'}`)).join('')}
+    ${state.squadView === 'sell' ? '<p class="small muted">Steigende Spieler werden gehalten – außer das Budget ist vor dem Spieltag negativ.</p>' : ''}
+    ${list.map((p) => (state.squadView === 'sell'
+      ? `<div class="srow">${playerRow(p, `${scoreBadge(p.sellScore, p.sellLabel)}<small>${eur(p.mv)}</small>`, `· ${p.inBestXI ? 'Startelf' : 'Bank'} · <span class="${deltaClass(p.daily)}">${signedEur(p.daily)}/Tag</span>`)}${reasonsHtml(p.sellReasons, 3)}</div>`
+      : playerRow(p, `<b>${eur(p.mv)}</b><small class="${deltaClass(p.buyGain)}">${signedEur(p.buyGain)} seit Kauf</small>`, `· Ø ${num(p.ap)} · ${p.inBestXI ? 'Startelf' : 'Bank'}`))).join('')}
   </section>`;
 }
 
@@ -665,11 +683,15 @@ function viewInfo() {
       <dt>Marktwert-Trend</dt>
       <dd>50 % letzte Tagesänderung + 30 % Ø der letzten 3 Tage + 20 % Ø der letzten 14 Tage. Signale: „Hoch überschritten“ (fällt nach Anstieg nahe am 92-Tage-Hoch), „Trendwende nach oben“ usw.</dd>
       <dt>Kauf-Score (0–100)</dt>
-      <dd>35 % Saison-Erwartung, 20 % Punkte je Mio., 20 % Unterbewertung, 15 % Marktwert-Momentum, 10 % Restprogramm (nächste 3 Gegner). Abzüge bei Verletzung/geringer Einsatzchance. Alles als Perzentil gegen die ganze Liga.</dd>
+      <dd>30 % Saison-Erwartung, 15 % Punkte je Mio., 15 % Unterbewertung, 20 % Marktwert-Momentum, 10 % Restprogramm (nächste 3 Gegner), 10 % Verstärkung deiner besten Elf. Abzüge bei Verletzung/geringer Einsatzchance. Alles als Perzentil gegen die ganze Liga.
+        <br>„Abwarten“: fällt der Marktwert um mehr als 1 %/Tag, wird der Spieler morgen billiger. „Trading-Kauf“: kaum Punkte, aber Marktwert steigt um ≥ 2 %/Tag – kaufen, halten, teurer verkaufen (Gebot höchstens mit halbem erwartetem 3-Tage-Zuwachs).</dd>
       <dt>Gebotsvorschlag</dt>
       <dd>Preis bzw. hochgerechneter Marktwert bei Ablauf + 1–6 % Aufschlag je nach Score + 2 % je Konkurrenzgebot (max. +8 %), gedeckelt beim fairen Marktwert (max. +20 %).</dd>
       <dt>Verkaufs-Score</dt>
-      <dd>Schwache Saison-Erwartung, fallender Marktwert, Überbewertung, schweres Programm, Bankplatz, Verletzung.</dd>
+      <dd><b>Steigt der Marktwert (≥ +0,2 %/Tag), wird gehalten</b> – ein Verkauf verschenkt Wertzuwachs. Ausnahme: Das Budget ist negativ und der Spieltag steht an.
+        <br>Für einen Verkauf sprechen: fallender Marktwert (am stärksten gewichtet), überschrittenes Marktwert-Hoch, kein Platz in deiner besten Elf, schwache Punkteerwartung, Verletzung, Überbewertung. Stammspieler der besten Elf werden geschützt.
+        <br>Fallende Spieler vor dem nächsten MW-Update verkaufen, steigende (falls nötig) erst danach.
+        <br><b>Budget negativ:</b> Die App wählt die Verkäufe mit dem geringsten Verlust an erwarteten Punkten und Wertzuwachs bis zum Spieltag und streicht überflüssige wieder. Mehr als 48 h vor Anpfiff ist das nur ein Hinweis, danach dringend.</dd>
     </dl>
     <p class="small muted">Alle Angaben sind Schätzungen ohne Gewähr – keine Garantie für Punkte oder Gewinne.</p>
   </section>
@@ -1100,15 +1122,18 @@ function playerActions(p) {
       <button class="btn small" data-action="unlist" data-id="${esc(p.id)}">Vom Markt nehmen</button></div>`;
   }
   if (p.mine) {
-    return `<div class="actions-box"><button class="btn ${p.sellLabel === 'Verkaufen' ? 'primary' : ''}" data-action="list" data-id="${esc(p.id)}">Auf den Transfermarkt setzen …</button>
-      <p class="small muted">Empfehlung: ${esc(p.sellLabel)} (Score ${p.sellScore})</p></div>`;
+    return `<div class="actions-box"><button class="btn ${/^Verkaufen|Bis Spieltag/.test(p.sellLabel) ? 'primary' : ''}" data-action="list" data-id="${esc(p.id)}">Auf den Transfermarkt setzen …</button>
+      <p class="small">Empfehlung: ${scoreBadge(p.sellScore, p.sellLabel)}</p>
+      ${reasonsHtml(p.sellReasons, 6)}
+      ${p.sellTiming ? `<p class="small muted">⏱ ${esc(p.sellTiming)}</p>` : ''}</div>`;
   }
+  const verdict = `<p class="small">Einschätzung: ${scoreBadge(p.buyScore, p.buyLabel)}</p>${reasonsHtml(p.buyReasons, 6)}`;
   if (p.market) {
-    return `<div class="actions-box">
-      <button class="btn primary" data-action="bid" data-id="${esc(p.id)}">${p.market.myBid ? 'Gebot ändern …' : 'Bieten …'}</button>
+    return `<div class="actions-box">${verdict}
+      <button class="btn ${/Kauf/.test(p.buyLabel) ? 'primary' : ''}" data-action="bid" data-id="${esc(p.id)}">${p.market.myBid ? 'Gebot ändern …' : 'Bieten …'}</button>
       ${p.market.myBid ? `<button class="btn" data-action="withdraw" data-id="${esc(p.id)}">Gebot zurückziehen</button>` : ''}</div>`;
   }
-  return '';
+  return p.buyReasons?.length ? `<div class="actions-box">${verdict}<p class="small muted">Nicht auf dem Transfermarkt.</p></div>` : '';
 }
 
 // ------------------------------------------------------------ Ereignisse

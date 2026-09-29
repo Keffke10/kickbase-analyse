@@ -4,11 +4,19 @@
 const BASE = 'https://api.kickbase.com/v4';
 
 export class ApiError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
+
+// Bekannte Kickbase-Fehlercodes (errMsg) in verständliche Meldungen übersetzen
+const ERR_TEXT = {
+  UnderpayNotAllowed: 'Das Gebot liegt unter dem Marktwert bzw. Angebotspreis.',
+  NotEnoughMoney: 'Dafür reicht dein Budget nicht.',
+  NotFound: 'Nicht gefunden – evtl. ist der Spieler nicht mehr auf dem Markt oder das Angebot ist abgelaufen.',
+};
 
 async function request(path, { method = 'GET', token, body, signal } = {}) {
   const headers = { Accept: 'application/json' };
@@ -30,10 +38,13 @@ async function request(path, { method = 'GET', token, body, signal } = {}) {
       continue;
     }
     if (!res.ok) {
+      let code = null;
+      try { code = (await res.json()).errMsg ?? null; } catch { /* kein JSON */ }
       const msg = res.status === 401 ? 'Sitzung abgelaufen – bitte neu anmelden.'
         : res.status === 403 ? 'Kein Zugriff.'
+        : code ? (ERR_TEXT[code] || `Kickbase lehnt ab: ${code}`)
         : `Kickbase-API Fehler ${res.status}`;
-      throw new ApiError(res.status, msg);
+      throw new ApiError(res.status, msg, code);
     }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
@@ -100,6 +111,25 @@ export class Kickbase {
   }
 
   clearCache() { this.cache.clear(); }
+
+  /** Nur die Daten verwerfen, die sich durch eine Aktion ändern (Rest bleibt gecacht → schnelles Neuladen). */
+  invalidateLive() {
+    const live = ['/me', '/squad', '/market', '/lineup', '/teamcenter/myeleven', '/teamprofile', '/ranking', '/activitiesFeed'];
+    for (const k of [...this.cache.keys()]) if (live.some((s) => k.includes(s))) this.cache.delete(k);
+  }
+
+  send(method, path, body) {
+    return request(path, { method, token: this.token, body });
+  }
+
+  // ---- Schreibende Aktionen (werden in der App immer erst bestätigt)
+  setLineup(formation, playerIds) { return this.send('POST', `/leagues/${this.lid}/lineup`, { type: formation, players: playerIds }); }
+  placeBid(pid, price) { return this.send('POST', `/leagues/${this.lid}/market/${pid}/offers`, { price }); }
+  withdrawBid(pid, offerId) { return this.send('DELETE', `/leagues/${this.lid}/market/${pid}/offers/${offerId}`); }
+  listPlayer(pid, price) { return this.send('POST', `/leagues/${this.lid}/market`, { pi: pid, prc: price }); }
+  unlistPlayer(pid) { return this.send('DELETE', `/leagues/${this.lid}/market/${pid}`); }
+  acceptOffer(pid, offerId) { return this.send('POST', `/leagues/${this.lid}/market/${pid}/offers/${offerId}/accept`, {}); }
+  declineOffer(pid, offerId) { return this.send('POST', `/leagues/${this.lid}/market/${pid}/offers/${offerId}/decline`, {}); }
 
   // Liga
   me() { return this.get(`/leagues/${this.lid}/me`); }

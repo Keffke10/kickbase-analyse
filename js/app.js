@@ -336,29 +336,40 @@ function viewLineup() {
     <div class="pitch">${[4, 3, 2, 1].map((k) => `<div class="line">${rows[k].map(tile).join('')}</div>`).join('')}</div>
     ${inn.length || out.length ? `<div class="changes"><div><h3 class="pos">Einwechseln</h3>${inn.map((p) => `<p>▲ ${esc(p.name)} <small>(${num(p.xp)})</small></p>`).join('') || '<p class="muted">–</p>'}</div>
       <div><h3 class="neg">Auswechseln</h3>${out.map((p) => `<p>▼ ${esc(p.name)} <small>(${num(p.xp)})</small></p>`).join('') || '<p class="muted">–</p>'}</div></div>` : '<p class="ok">✓ Deine aktuelle Aufstellung ist bereits optimal.</p>'}
-    <p class="small muted">Die App ändert nichts an deinem Team – stelle die Elf in der Kickbase-App um.</p>
+    ${inn.length || out.length
+      ? `<button class="btn primary" data-action="applyLineup" data-f="${esc(L.formation)}">Diese Elf in Kickbase übernehmen</button>`
+      : `<button class="btn" data-action="applyLineup" data-f="${esc(L.formation)}">Erneut an Kickbase senden</button>`}
+    <p class="small muted">Du bestätigst jede Änderung, bevor sie an Kickbase geht. Oder tippe unten auf eine andere Formation.</p>
   </section>
   <section class="card"><h2>Alle Formationen</h2>
     <div class="formations">${FORMATIONS.map((f) => {
       const t = formationTotal(a.mine, f);
-      return `<div class="${f === L.formation ? 'best' : ''}"><b>${f}</b><span>${t == null ? '–' : num(t)}</span></div>`;
+      return t == null ? `<div class="off"><b>${f}</b><span>–</span></div>`
+        : `<button class="${f === L.formation ? 'best' : ''}" data-action="applyLineup" data-f="${f}" aria-label="Formation ${f} übernehmen"><b>${f}</b><span>${num(t)}</span></button>`;
     }).join('')}</div>
+    <p class="small muted">Tippe auf eine Formation, um ihre beste Elf zu übernehmen.</p>
   </section>
   <section class="card"><h2>Bank</h2>
     ${L.bench.map((p) => playerRow(p, `<b>${num(p.xp)}</b><small>Pkt erw.</small>`, `· ${fixtureText(p.nextFix, a.teams)}`)).join('')}
   </section>`;
 }
 
-function formationTotal(players, f) {
+/** Beste Elf für eine Formation, sortiert TW → ABW → MF → ST (so erwartet es Kickbase). */
+function formationXI(players, f) {
   const [d, m, s] = f.split('-').map(Number);
   const need = { 1: 1, 2: d, 3: m, 4: s };
-  let total = 0;
+  const xi = [];
   for (const pos of [1, 2, 3, 4]) {
     const list = players.filter((p) => p.pos === pos).sort((x, y) => y.xp - x.xp);
     if (list.length < need[pos]) return null;
-    total += list.slice(0, need[pos]).reduce((sum, p) => sum + p.xp, 0);
+    xi.push(...list.slice(0, need[pos]));
   }
-  return total;
+  return xi;
+}
+
+function formationTotal(players, f) {
+  const xi = formationXI(players, f);
+  return xi ? xi.reduce((sum, p) => sum + p.xp, 0) : null;
 }
 
 // ---- Transfermarkt
@@ -390,6 +401,18 @@ function viewMarket() {
 
 function marketCard(p) {
   const a = state.a;
+  if (p.listedByMe) {
+    return `<article class="card mcard own">
+      ${playerRow(p, '<span class="badge neutral">Dein Angebot</span>', '· von dir angeboten')}
+      <div class="grid4">
+        ${stat('Dein Preis', eur(p.market.price))}
+        ${stat('Marktwert', eur(p.mv))}
+        ${stat('Fairer MW', eur(p.fair))}
+        ${stat('MW-Trend', trend(p))}
+      </div>
+      ${marketActions(p)}
+    </article>`;
+  }
   return `<article class="card mcard">
     ${playerRow(p, scoreBadge(p.buyScore, p.buyLabel), `· ${p.market.seller ? `von <b>${esc(p.market.seller.name)}</b>` : 'Kickbase'}`)}
     <div class="grid4">
@@ -408,7 +431,25 @@ function marketCard(p) {
       ${p.market.offers ? `<small>${p.market.offers} Gebot(e) liegen vor</small>` : ''}
       ${p.market.myBid ? `<small>Dein Gebot: <b>${eur(p.market.myBid)}</b> – <span class="${p.bidStatus === 'passt' ? 'pos' : 'neg'}">${esc(p.bidStatus)}</span></small>` : ''}
     </div>
+    ${marketActions(p)}
   </article>`;
+}
+
+/** Aktionsknöpfe je nach Situation: bieten / Gebot ändern / eigenes Angebot verwalten. */
+function marketActions(p) {
+  if (p.listedByMe) {
+    return `<div class="actions">
+      ${p.market.offerList.length ? `<p class="small"><b>${p.market.offerList.length} Angebot(e)</b> – im Spieler-Detail annehmen oder ablehnen.</p>` : '<p class="small muted">Dein Angebot – noch keine Gebote.</p>'}
+      <button class="btn small" data-action="player" data-id="${esc(p.id)}">Angebote ansehen</button>
+      <button class="btn small" data-action="unlist" data-id="${esc(p.id)}">Vom Markt nehmen</button></div>`;
+  }
+  if (p.mine) return '';
+  if (p.market.myBid) {
+    return `<div class="actions">
+      <button class="btn small primary-soft" data-action="bid" data-id="${esc(p.id)}">Gebot ändern</button>
+      <button class="btn small" data-action="withdraw" data-id="${esc(p.id)}">Gebot zurückziehen</button></div>`;
+  }
+  return `<div class="actions"><button class="btn small primary-soft" data-action="bid" data-id="${esc(p.id)}">Bieten …</button></div>`;
 }
 
 // ---- Kader
@@ -672,6 +713,7 @@ async function openPlayer(id) {
       ${p.mine ? stat('Verkaufs-Score', p.sellScore) : ''}
     </div>
     ${p.market ? `<div class="bid ${p.affordable ? '' : 'warn'}"><span>Gebotsvorschlag <b>${eur(p.bid)}</b> · max. ${eur(p.bidMax)} · läuft ab in ${countdown(p.market.exs)}</span>${p.market.offers ? `<small>${p.market.offers} Konkurrenzgebot(e) → Aufschlag +${Math.min(8, 2 * p.market.offers)} %</small>` : ''}</div>` : ''}
+    ${playerActions(p)}
     <h3>Prognose-Grundlage</h3>
     ${basisTable(p)}
     <h3>Nächste Spiele</h3>
@@ -807,6 +849,266 @@ function closeSheet() {
   $sheet.hidden = true;
   $sheet.innerHTML = '';
   document.body.classList.remove('noscroll');
+  pending = null;
+}
+
+// ------------------------------------------------------------ Aktionen (schreibend – immer mit Bestätigung)
+
+let pending = null; // { run: async () => {}, done: 'Erfolgsmeldung' }
+const plain = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
+const parseEuro = (s) => { const v = parseInt(String(s).replace(/\D/g, ''), 10); return Number.isFinite(v) ? v : null; };
+const round10k = (v) => Math.ceil(v / 10000) * 10000;
+
+function toast(msg, level = 'good') {
+  let el = document.getElementById('toast');
+  if (!el) { el = document.createElement('div'); el.id = 'toast'; el.setAttribute('role', 'status'); document.body.append(el); }
+  el.className = `toast ${level}`;
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { el.hidden = true; }, 4000);
+}
+
+function openSheet(title, body) {
+  $sheet.innerHTML = `<div class="sheet-back" data-action="close"></div><div class="sheet-body" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <button class="sheet-close icon-btn" data-action="close" aria-label="Schließen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <h2>${esc(title)}</h2>${body}</div>`;
+  $sheet.hidden = false;
+  $sheet.dataset.pid = '';
+  document.body.classList.add('noscroll');
+}
+
+function confirmAction({ title, body, confirmLabel, danger = false, run, done }) {
+  openSheet(title, `${body}
+    <div class="confirm-row"><button class="btn" data-action="close">Abbrechen</button>
+    <button class="btn ${danger ? 'danger-solid' : 'primary'}" data-action="runPending">${esc(confirmLabel)}</button></div>
+    <p class="small muted">Wird sofort in deinem Kickbase-Konto ausgeführt.</p>`);
+  pending = { run, done };
+}
+
+async function runPending(btn) {
+  if (!pending) return;
+  const { run, done } = pending;
+  pending = null;
+  btn.disabled = true;
+  btn.textContent = 'Wird gesendet …';
+  try {
+    await run();
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) { closeSheet(); handleError(e); return; }
+    btn.textContent = 'Fehlgeschlagen';
+    const p = document.createElement('p');
+    p.className = 'error';
+    p.setAttribute('role', 'alert');
+    p.textContent = e.message || 'Unbekannter Fehler';
+    btn.closest('.sheet-body')?.append(p);
+    return;
+  }
+  closeSheet();
+  toast(`${done} Daten werden aktualisiert …`);
+  await refreshLive();
+  toast(done);
+}
+
+/** Nach einer Aktion nur veränderliche Daten neu laden; bereits geladene Spielerdaten bleiben erhalten. */
+async function refreshLive() {
+  const old = state.raw;
+  try {
+    state.kb.invalidateLive();
+    const raw = await loadLeague(state.kb, () => {});
+    for (const key of ['detailMap', 'perfMap', 'mvMap']) for (const [k, v] of old[key]) if (!raw[key].has(k)) raw[key].set(k, v);
+    state.raw = raw;
+    state.a = analyze(raw, state.s.user.id);
+    render();
+  } catch (e) { handleError(e); }
+}
+
+// ---- Aufstellung übernehmen
+
+function applyLineup(f) {
+  const a = state.a;
+  const xi = formationXI(a.mine, f);
+  if (!xi) { toast(`Für ${f} fehlen dir Spieler auf einer Position.`, 'crit'); return; }
+  const total = xi.reduce((s, p) => s + p.xp, 0);
+  const inn = xi.filter((p) => !a.currentXI.has(p.id));
+  const outIds = new Set(xi.map((p) => p.id));
+  const out = a.mine.filter((p) => a.currentXI.has(p.id) && !outIds.has(p.id));
+  const risky = xi.filter((p) => !p.nextFix || statusInfo(p.st)?.level === 'crit' || p.prob >= 4);
+  const lines = [1, 2, 3, 4].map((pos) => `<p><b>${POS[pos]}</b> ${xi.filter((p) => p.pos === pos).map((p) => `${esc(p.name)} <small class="muted">(${num(p.xp)})</small>`).join(', ')}</p>`).join('');
+  confirmAction({
+    title: `Aufstellung ${f} übernehmen`,
+    body: `<p>Erwartet: <b>${num(total)} Punkte</b></p>${lines}
+      ${inn.length ? `<p class="pos">▲ rein: ${inn.map((p) => esc(p.name)).join(', ')}</p>` : ''}
+      ${out.length ? `<p class="neg">▼ raus: ${out.map((p) => esc(p.name)).join(', ')}</p>` : ''}
+      ${risky.length ? `<p class="warn-text">! Achtung: ${risky.map((p) => esc(p.name)).join(', ')} (Verletzung, geringe Einsatzchance oder kein Spiel)</p>` : ''}`,
+    confirmLabel: 'In Kickbase übernehmen',
+    run: () => state.kb.setLineup(f, xi.map((p) => p.id)),
+    done: `Aufstellung ${f} gespeichert.`,
+  });
+}
+
+// ---- Bieten
+
+function openBid(id) {
+  const a = state.a;
+  const p = a.players.get(id);
+  if (!p?.market) return;
+  const start = p.market.myBid || Math.max(p.bid, p.market.price);
+  const presets = [['Preis', p.market.price], ['Vorschlag', p.bid], ['Max. sinnvoll', p.bidMax]]
+    .filter(([, v], i, arr) => v && arr.findIndex((x) => x[1] === v) === i);
+  openSheet(`${p.market.myBid ? 'Gebot ändern' : 'Gebot'}: ${p.fn} ${p.name}`, `
+    <p class="small">Preis <b>${eur(p.market.price)}</b> · Marktwert ${eur(p.mv)} · fair ${eur(p.fair)} · läuft ab in ${countdown(p.market.exs)}${p.market.offers ? ` · ${p.market.offers} Konkurrenzgebot(e)` : ''}</p>
+    <label class="field">Dein Gebot in €<input id="amount" inputmode="numeric" autocomplete="off" value="${plain.format(start)}"></label>
+    <div class="presets">${presets.map(([l, v]) => `<button class="preset" data-action="preset" data-v="${v}">${l}<b>${eur(v)}</b></button>`).join('')}</div>
+    <div id="amountInfo" class="amount-info"></div>
+    <button class="btn primary" data-action="bidSubmit" data-id="${esc(id)}">Gebot abgeben</button>
+    ${p.market.myBid ? `<p class="small muted">Dein bisheriges Gebot (${eur(p.market.myBid)}) wird dabei ersetzt.</p>` : ''}`);
+  wireAmount(() => bidInfo(p));
+}
+
+function bidInfo(p) {
+  const a = state.a;
+  const v = parseEuro(document.getElementById('amount').value) || 0;
+  const others = a.myBids.filter((x) => x.id !== p.id).reduce((s, x) => s + x.market.myBid, 0);
+  const msgs = [];
+  if (v < p.market.price) msgs.push(['crit', `Unter dem Preis von ${eur(p.market.price)} – Kickbase lehnt das ab.`]);
+  if (v > p.bidMax) msgs.push(['warn', `Über dem sinnvollen Maximum (${eur(p.bidMax)}).`]);
+  if (v + others > a.budget) msgs.push(['warn', `Alle deine Gebote zusammen (${eur(v + others)}) übersteigen dein Budget (${eur(a.budget)}).`]);
+  return { ok: v >= p.market.price, label: `Gebot über ${eur(v)} abgeben`, html: `<p>Budget nach Zuschlag: <b class="${a.budget - v < 0 ? 'neg' : ''}">${eur(a.budget - v)}</b></p>${msgs.map(([l, t]) => `<p class="${l === 'crit' ? 'neg' : 'warn-text'}">${l === 'crit' ? '✕' : '!'} ${esc(t)}</p>`).join('')}` };
+}
+
+function wireAmount(info) {
+  const input = document.getElementById('amount');
+  const out = document.getElementById('amountInfo');
+  const submit = $sheet.querySelector('[data-action=bidSubmit],[data-action=listSubmit]');
+  const update = () => {
+    const r = info();
+    out.innerHTML = r.html;
+    submit.disabled = !r.ok;
+    submit.textContent = r.label;
+  };
+  input.addEventListener('input', update);
+  input.addEventListener('blur', () => { const v = parseEuro(input.value); if (v) input.value = plain.format(v); });
+  $sheet.querySelectorAll('[data-action=preset]').forEach((b) => b.addEventListener('click', () => { input.value = plain.format(Number(b.dataset.v)); update(); }));
+  update();
+}
+
+function submitBid(id, btn) {
+  const p = state.a.players.get(id);
+  const v = parseEuro(document.getElementById('amount').value);
+  if (!p || !v) return;
+  const old = p.market.myBid ? { id: p.market.myBidId, price: p.market.myBid } : null;
+  pending = {
+    async run() {
+      if (old?.id != null) {
+        await state.kb.withdrawBid(id, old.id);
+        try { await state.kb.placeBid(id, v); } catch (e) { await state.kb.placeBid(id, old.price).catch(() => {}); throw e; }
+      } else {
+        await state.kb.placeBid(id, v);
+      }
+    },
+    done: `Gebot über ${eur(v)} für ${p.name} abgegeben.`,
+  };
+  runPending(btn);
+}
+
+function withdrawBid(id) {
+  const p = state.a.players.get(id);
+  confirmAction({
+    title: 'Gebot zurückziehen',
+    body: `<p>Dein Gebot über <b>${eur(p.market.myBid)}</b> für <b>${esc(p.name)}</b> zurückziehen?</p>`,
+    confirmLabel: 'Zurückziehen',
+    run: () => state.kb.withdrawBid(id, p.market.myBidId),
+    done: `Gebot für ${p.name} zurückgezogen.`,
+  });
+}
+
+// ---- Verkaufen
+
+function openList(id) {
+  const p = state.a.players.get(id);
+  const presets = [['Marktwert', p.mv], ['MW +5 %', round10k(p.mv * 1.05)], ['MW +10 %', round10k(p.mv * 1.1)], ['Fairer MW', p.fair ? round10k(p.fair) : null]]
+    .filter(([, v], i, arr) => v && v >= p.mv && arr.findIndex((x) => x[1] === v) === i);
+  openSheet(`Verkaufen: ${p.fn} ${p.name}`, `
+    <p class="small">Marktwert <b>${eur(p.mv)}</b> · fair ${eur(p.fair)} · ${p.buyGain != null ? `seit Kauf ${signedEur(p.buyGain)} · ` : ''}Verkaufs-Score ${p.sellScore} (${esc(p.sellLabel)})</p>
+    <label class="field">Angebotspreis in €<input id="amount" inputmode="numeric" autocomplete="off" value="${plain.format(round10k(Math.min(Math.max(p.mv, p.fair ?? 0), p.mv * 1.1)))}"></label>
+    <div class="presets">${presets.map(([l, v]) => `<button class="preset" data-action="preset" data-v="${v}">${l}<b>${eur(v)}</b></button>`).join('')}</div>
+    <div id="amountInfo" class="amount-info"></div>
+    <button class="btn primary" data-action="listSubmit" data-id="${esc(id)}">Auf den Transfermarkt setzen</button>
+    <p class="small muted">Der Spieler bleibt in deinem Kader, bis du ein Angebot annimmst. Du kannst ihn jederzeit wieder vom Markt nehmen.</p>`);
+  wireAmount(() => {
+    const v = parseEuro(document.getElementById('amount').value) || 0;
+    const warn = v > p.mv * 1.25 ? `<p class="warn-text">! Deutlich über Marktwert – Mitspieler bieten dann eher nicht.</p>` : '';
+    return { ok: v > 0, label: `Für ${eur(v)} anbieten`, html: `<p>Im Vergleich zum Marktwert: <b class="${deltaClass(v - p.mv)}">${signedEur(v - p.mv)}</b></p>${warn}` };
+  });
+}
+
+function submitList(id, btn) {
+  const p = state.a.players.get(id);
+  const v = parseEuro(document.getElementById('amount').value);
+  if (!p || !v) return;
+  pending = { run: () => state.kb.listPlayer(id, v), done: `${p.name} für ${eur(v)} auf den Transfermarkt gesetzt.` };
+  runPending(btn);
+}
+
+function unlist(id) {
+  const p = state.a.players.get(id);
+  confirmAction({
+    title: 'Vom Markt nehmen',
+    body: `<p><b>${esc(p.name)}</b> vom Transfermarkt nehmen? Offene Angebote verfallen.</p>`,
+    confirmLabel: 'Vom Markt nehmen',
+    run: () => state.kb.unlistPlayer(id),
+    done: `${p.name} ist nicht mehr auf dem Markt.`,
+  });
+}
+
+function acceptOffer(id, oid) {
+  const p = state.a.players.get(id);
+  const o = p.market.offerList.find((x) => String(x.id) === oid);
+  confirmAction({
+    title: 'Angebot annehmen',
+    body: `<p><b>${esc(p.name)}</b> für <b>${eur(o?.price)}</b> an <b>${esc(o?.from)}</b> verkaufen?</p>
+      <p class="small">Marktwert ${eur(p.mv)} · Differenz <span class="${deltaClass((o?.price ?? 0) - p.mv)}">${signedEur((o?.price ?? 0) - p.mv)}</span></p>
+      <p class="warn-text">! Der Verkauf kann nicht rückgängig gemacht werden.</p>`,
+    confirmLabel: 'Verkaufen',
+    danger: true,
+    run: () => state.kb.acceptOffer(id, oid),
+    done: `${p.name} verkauft.`,
+  });
+}
+
+function declineOffer(id, oid) {
+  const p = state.a.players.get(id);
+  confirmAction({
+    title: 'Angebot ablehnen',
+    body: `<p>Angebot für <b>${esc(p.name)}</b> ablehnen?</p>`,
+    confirmLabel: 'Ablehnen',
+    run: () => state.kb.declineOffer(id, oid),
+    done: 'Angebot abgelehnt.',
+  });
+}
+
+/** Aktionsbereich im Spieler-Detail. */
+function playerActions(p) {
+  if (p.listedByMe) {
+    const offers = p.market.offerList;
+    return `<div class="actions-box"><h3>Dein Angebot · ${eur(p.market.price)}</h3>
+      ${offers.length ? offers.map((o) => `<div class="offer"><span><b>${eur(o.price)}</b> von ${esc(o.from)} <small class="${deltaClass(o.price - p.mv)}">(${signedEur(o.price - p.mv)} zum MW)</small></span>
+        <span><button class="btn small danger-solid" data-action="accept" data-id="${esc(p.id)}" data-oid="${esc(o.id)}">Annehmen</button>
+        <button class="btn small" data-action="decline" data-id="${esc(p.id)}" data-oid="${esc(o.id)}">Ablehnen</button></span></div>`).join('')
+        : '<p class="small muted">Noch keine Angebote.</p>'}
+      <button class="btn small" data-action="unlist" data-id="${esc(p.id)}">Vom Markt nehmen</button></div>`;
+  }
+  if (p.mine) {
+    return `<div class="actions-box"><button class="btn ${p.sellLabel === 'Verkaufen' ? 'primary' : ''}" data-action="list" data-id="${esc(p.id)}">Auf den Transfermarkt setzen …</button>
+      <p class="small muted">Empfehlung: ${esc(p.sellLabel)} (Score ${p.sellScore})</p></div>`;
+  }
+  if (p.market) {
+    return `<div class="actions-box">
+      <button class="btn primary" data-action="bid" data-id="${esc(p.id)}">${p.market.myBid ? 'Gebot ändern …' : 'Bieten …'}</button>
+      ${p.market.myBid ? `<button class="btn" data-action="withdraw" data-id="${esc(p.id)}">Gebot zurückziehen</button>` : ''}</div>`;
+  }
+  return '';
 }
 
 // ------------------------------------------------------------ Ereignisse
@@ -827,6 +1129,17 @@ document.addEventListener('click', async (ev) => {
     case 'playerFree': state.playerFree = t.checked; updatePlayerList(); break;
     case 'squadView': state.squadView = t.dataset.v; render(); break;
     case 'leagueView': state.leagueView = t.dataset.v; render(); break;
+    // schreibende Aktionen
+    case 'applyLineup': applyLineup(t.dataset.f); break;
+    case 'bid': openBid(t.dataset.id); break;
+    case 'bidSubmit': submitBid(t.dataset.id, t); break;
+    case 'withdraw': withdrawBid(t.dataset.id); break;
+    case 'list': openList(t.dataset.id); break;
+    case 'listSubmit': submitList(t.dataset.id, t); break;
+    case 'unlist': unlist(t.dataset.id); break;
+    case 'accept': acceptOffer(t.dataset.id, t.dataset.oid); break;
+    case 'decline': declineOffer(t.dataset.id, t.dataset.oid); break;
+    case 'runPending': runPending(t); break;
     case 'mvRange':
       t.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === t));
       loadMv($sheet.dataset.pid, Number(t.dataset.v));

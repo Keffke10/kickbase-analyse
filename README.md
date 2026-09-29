@@ -13,7 +13,8 @@ Kickbase-Konto an.
 - Strenge Content-Security-Policy: Netzwerkverbindungen nur zu Kickbase, Bilder nur vom Kickbase-CDN,
   keine Drittanbieter-Skripte, keine Fonts, kein Tracking.
 - Alle Texte aus der API (z. B. frei wählbare Managernamen) werden HTML-escaped.
-- Die App arbeitet nur lesend: Sie gibt keine Gebote ab und ändert keine Aufstellung.
+- Schreibende Aktionen (Aufstellung, Gebote, Verkauf) werden nur nach Bestätigung im Dialog ausgeführt
+  und gehen direkt vom Browser an Kickbase.
 - Der Service Worker cached nur die App-Dateien, keine API-Daten.
 
 ## Features
@@ -21,8 +22,9 @@ Kickbase-Konto an.
 | Tab | Inhalt |
 |---|---|
 | Übersicht | Platz, Budget, Teamwert, Countdown, Warnungen (verletzt in Startelf, kein Spiel, Budget negativ), eigene offene Gebote mit Bewertung, MW-Trading (steigende Marktspieler / fallende eigene Spieler, Countdown zum MW-Update), Top-Käufe, Tausch-Ideen, Verkaufskandidaten |
-| Aufstellung | Beste Elf über alle 10 Formationen nach erwarteten Punkten, Ein-/Auswechselliste, Bank |
-| Markt | Kauf-Score, fairer MW und Über-/Unterbewertung, MW-Trend, nächster Gegner mit Siegchance, Gebotsvorschlag |
+| Aufstellung | Beste Elf über alle 10 Formationen nach erwarteten Punkten, Ein-/Auswechselliste, Bank; **mit einem Tipp in Kickbase übernehmen** (auch jede andere Formation) |
+| Markt | Kauf-Score, fairer MW und Über-/Unterbewertung, MW-Trend, nächster Gegner mit Siegchance, Gebotsvorschlag; **bieten, Gebot ändern/zurückziehen** |
+| Spieler-Detail (eigene Spieler) | **Auf den Transfermarkt setzen** (Preisvorschläge), vom Markt nehmen, **Angebote annehmen/ablehnen** |
 | Kader | Verkaufsranking, Gewinn seit Kauf, Tauschvorschläge, Budget-Ausgleich |
 | Spieler | Alle ca. 460 Bundesliga-Spieler: filtern, suchen, nach Unterbewertung, Preis-Leistung usw. sortieren; optionale Tiefenanalyse |
 | Liga | Tabelle, Teamwerte, Managerkader, Saisonverlauf (Punkte & Platz je Spieltag, Spieltagssiege), Restprogramm-Matrix aller Vereine, Transfer-Bilanz je Manager |

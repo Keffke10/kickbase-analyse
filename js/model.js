@@ -297,7 +297,12 @@ export function analyze(raw, myUserId) {
       p.lineupSlot = s.lo ?? null;
     }
     if (m) {
-      p.market = { price: m.prc, exs: m.exs, offers: m.ofc, seller: m.u ? { id: m.u.i, name: m.u.n } : null, isNew: m.isn, since: m.dt, myBid: m.uop ?? null };
+      p.market = { price: m.prc, exs: m.exs, offers: m.ofc, seller: m.u ? { id: m.u.i, name: m.u.n } : null, isNew: m.isn, since: m.dt, myBid: m.uop ?? null, myBidId: m.uoid ?? null,
+        // Angebote auf eigene, gelistete Spieler (Feldnamen defensiv, da unterschiedlich benannt)
+        offerList: (Array.isArray(m.ofs) ? m.ofs : []).map((o) => ({
+          id: o.i ?? o.id ?? o.uoid, price: o.uop ?? o.prc ?? o.price ?? o.p, from: o.unm ?? o.u?.n ?? o.n ?? 'Kickbase', dt: o.dt ?? null,
+        })).filter((o) => o.id != null) };
+      p.listedByMe = m.u?.i === String(myUserId);
       p.totalPts = p.totalPts ?? m.p ?? null;
     }
     if (p.ownerId && !p.ownerName) p.ownerName = managers.get(p.ownerId)?.n ?? null;

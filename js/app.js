@@ -5,7 +5,7 @@ import {
   esc, img, num, num1, eur, signedEur, pct, deltaClass, POS, POS_LONG, statusInfo, PROB, countdown, dateTime, ago, mean,
 } from './util.js';
 
-const APP_VERSION = '0.3-dev';
+const APP_VERSION = '0.3';
 
 // ------------------------------------------------------------ Sitzung (nur Token, niemals Passwort)
 

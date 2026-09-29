@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Datenschutzerklärung – Kickbase Analyse</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main class="content legal">
+  <p><a href="./">← zurück zur App</a></p>
+  <article class="card">
+    <h1>Datenschutzerklärung</h1>
+    <p class="small muted">Stand: 29.09.2026</p>
+
+    <h2>1. Art des Angebots</h2>
+    <p>Private, nicht-kommerzielle Hilfs-App für die Mitglieder einer einzelnen Kickbase-Liga. Das Angebot wird nicht öffentlich beworben, ist für Suchmaschinen gesperrt und nur über einen privat geteilten Link erreichbar. Fragen bitte direkt in der Liga an den Betreiber oder über das GitHub-Profil <a href="https://github.com/Keffke10" rel="noopener noreferrer">Keffke10</a>.</p>
+
+    <h2>2. Grundprinzip: keine eigene Datenverarbeitung auf Servern</h2>
+    <p>Diese Web-App ist eine rein statische Anwendung. Sie läuft vollständig in deinem Browser. Der Betreiber betreibt <b>keinen Server, keine Datenbank und kein Backend</b>, das deine Kickbase-Daten empfängt, speichert oder auswertet. Es werden keine Cookies gesetzt, kein Tracking, keine Analyse- oder Werbedienste und keine externen Schriftarten eingesetzt.</p>
+
+    <h2>3. Anmeldung bei Kickbase</h2>
+    <p>Wenn du dich anmeldest, sendet dein Browser E-Mail-Adresse und Passwort <b>direkt und TLS-verschlüsselt an die Server der Kickbase GmbH</b> (api.kickbase.com). Der Betreiber dieser App erhält diese Daten zu keinem Zeitpunkt. Das Passwort wird nach dem Absenden aus dem Formular entfernt und nirgends gespeichert.</p>
+    <p>Kickbase antwortet mit einem Sitzungs-Token. Dieses Token wird</p>
+    <ul>
+      <li>standardmäßig im <i>sessionStorage</i> deines Browsers gehalten und beim Schließen des Tabs automatisch gelöscht,</li>
+      <li>nur wenn du „Angemeldet bleiben“ wählst, im <i>localStorage</i> gespeichert (höchstens bis zum Ablauf des Tokens, ca. 7 Tage).</li>
+    </ul>
+    <p>„Abmelden“ löscht das Token sofort. Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO (Bereitstellung der von dir angeforderten Funktion) bzw. § 25 Abs. 2 Nr. 2 TDDDG für die unbedingt erforderliche lokale Speicherung.</p>
+
+    <h2>4. Abruf deiner Ligadaten</h2>
+    <p>Mit dem Token ruft dein Browser deine Liga-, Kader-, Markt- und Spielerdaten direkt bei Kickbase ab. Die Auswertung (Empfehlungen, Marktwertmodell) erfolgt ausschließlich lokal im Arbeitsspeicher des Tabs. Spieler- und Vereinsbilder werden vom Kickbase-CDN (kickbase.b-cdn.net) geladen; dabei wird deine IP-Adresse an diesen Dienst übermittelt. Für die Verarbeitung durch Kickbase gilt die <a href="https://www.kickbase.com/datenschutz" rel="noopener noreferrer">Datenschutzerklärung von Kickbase</a>.</p>
+    <p>Die App ist rein lesend: Sie ändert weder Aufstellung noch gibt sie Gebote ab.</p>
+
+    <h2>5. Hosting</h2>
+    <p>Die statischen Dateien werden über GitHub Pages (GitHub Inc., USA) bereitgestellt. Beim Aufruf verarbeitet der Hoster technisch notwendige Verbindungsdaten (z. B. IP-Adresse, Zeitpunkt, aufgerufene Datei) in Server-Logs. Rechtsgrundlage: Art. 6 Abs. 1 lit. f DSGVO (sichere und stabile Bereitstellung). Dabei können Daten in die USA übermittelt werden (EU-US Data Privacy Framework). Details: <a href="https://docs.github.com/de/site-policy/privacy-policies/github-general-privacy-statement" rel="noopener noreferrer">Datenschutzerklärung von GitHub</a>.</p>
+
+    <h2>6. Offline-Cache</h2>
+    <p>Ein Service Worker speichert ausschließlich die Programmdateien der App (HTML, CSS, JavaScript, Icons) im Browser-Cache, damit sie schneller lädt. Persönliche Daten oder Antworten der Kickbase-API werden nicht zwischengespeichert.</p>
+
+    <h2>7. Deine Rechte</h2>
+    <p>Da der Betreiber keine personenbezogenen Daten von dir speichert, können Auskunfts- oder Löschanfragen bezüglich deines Kickbase-Kontos nur von Kickbase beantwortet werden. Lokal gespeicherte Daten löschst du jederzeit über „Abmelden“ oder die Browser-Einstellungen. Du hast das Recht, dich bei einer Datenschutz-Aufsichtsbehörde zu beschweren.</p>
+
+    <h2>8. Hinweis</h2>
+    <p>Dies ist ein inoffizielles Fan-Projekt und steht in keiner Verbindung zur Kickbase GmbH. Die App nutzt nicht offiziell dokumentierte Schnittstellen.</p>
+  </article>
+</main>
+</body>
+</html>

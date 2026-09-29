@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- Strenge CSP: Skripte nur von hier, Netzwerk nur zu Kickbase, keine Drittanbieter -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://kickbase.b-cdn.net; connect-src https://api.kickbase.com; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#0f7a4a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="description" content="Inoffizielle Analyse-App für Kickbase-Ligen: Aufstellung, Transfers, faire Marktwerte.">
+  <title>Kickbase Analyse</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body data-view="boot">
+  <div id="app"><main class="loading"><div class="spinner" aria-hidden="true"></div></main></div>
+  <div id="sheet" hidden></div>
+  <noscript><p class="card">Diese App benötigt JavaScript.</p></noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
